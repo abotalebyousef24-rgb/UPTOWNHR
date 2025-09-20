@@ -1,0 +1,185 @@
+// This is your Prisma schema file
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- USER AND PROFILE MODELS ---
+model User {
+  id                String              @id @default(cuid())
+  email             String              @unique
+  password          String
+  role              Role                @default(EMPLOYEE)
+  isActive          Boolean             @default(true) // NEW FIELD!
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  profile           EmployeeProfile?
+  approvedRequests  LeaveRequest[]      @relation("ApprovedByUser")
+  deniedRequests    LeaveRequest[]      @relation("DeniedByUser")
+  cancelledRequests LeaveRequest[]      @relation("CancelledByUser")
+  createdHolidays   Holiday[]           @relation("CreatedByUser")
+  auditActions      LeaveRequestAudit[] @relation("ChangedByUser")
+}
+
+model EmployeeProfile {
+  id             String         @id @default(cuid())
+  userId         String         @unique
+  user           User           @relation(fields: [userId], references: [id])
+  firstName      String
+  lastName       String
+  position       String
+  startDate      DateTime
+  managerId      String?
+  manager        EmployeeProfile? @relation("DirectReports", fields: [managerId], references: [id])
+  directReports  EmployeeProfile[]  @relation("DirectReports")
+  leaveRequests  LeaveRequest[]
+  leaveBalances  LeaveBalance[]
+  holidays       Holiday[]
+  workScheduleId String?
+  workSchedule   WorkSchedule?  @relation(fields: [workScheduleId], references: [id])
+}
+
+// --- LEAVE MANAGEMENT MODELS ---
+model LeaveType {
+  id               String         @id @default(cuid())
+  name             String         @unique
+  defaultAllowance Float          @default(0)
+  unit             LeaveUnit      @default(DAYS)
+  cadence          LeaveCadence   @default(ANNUAL)
+  balances         LeaveBalance[]
+  requests         LeaveRequest[]
+}
+
+model LeaveBalance {
+  id               String          @id @default(cuid())
+  employeeId       String
+  employee         EmployeeProfile @relation(fields: [employeeId], references: [id])
+  leaveTypeId      String
+  leaveType        LeaveType       @relation(fields: [leaveTypeId], references: [id])
+  total            Float
+  remaining        Float
+  year             Int
+  month            Int?
+  isManualOverride Boolean         @default(false)
+  isLocked         Boolean         @default(false)
+
+  @@unique([employeeId, leaveTypeId, year, month])
+}
+
+model LeaveRequest {
+  id                         String              @id @default(cuid())
+  employeeId                 String
+  employee                   EmployeeProfile     @relation(fields: [employeeId], references: [id])
+  leaveTypeId                String
+  leaveType                  LeaveType           @relation(fields: [leaveTypeId], references: [id])
+  startDate                  DateTime
+  endDate                    DateTime
+  status                     LeaveStatus         @default(PENDING_MANAGER)
+  statusBeforeCancellation   LeaveStatus?        // NEW FIELD!
+  denialReason               String?
+  cancellationReason         String?
+  skipReason                 String?
+  createdAt                  DateTime            @default(now())
+  updatedAt                  DateTime            @updatedAt
+  approvedById               String?
+  deniedById                 String?
+  cancelledById              String?
+  approvedBy                 User?               @relation("ApprovedByUser", fields: [approvedById], references: [id])
+  deniedBy                   User?               @relation("DeniedByUser", fields: [deniedById], references: [id])
+  cancelledBy                User?               @relation("CancelledByUser", fields: [cancelledById], references: [id])
+  approvedAt                 DateTime?
+  deniedAt                   DateTime?
+  cancelledAt                DateTime?
+  auditTrail                 LeaveRequestAudit[]
+}
+
+model LeaveRequestAudit {
+  id             String       @id @default(cuid())
+  leaveRequestId String
+  leaveRequest   LeaveRequest @relation(fields: [leaveRequestId], references: [id])
+  changedById    String
+  changedBy      User         @relation("ChangedByUser", fields: [changedById], references: [id])
+  previousStatus LeaveStatus
+  newStatus      LeaveStatus
+  reason         String?
+  createdAt      DateTime     @default(now())
+}
+
+// --- HOLIDAY MODEL ---
+model Holiday {
+  id            String           @id @default(cuid())
+  name          String
+  // Changed from single 'date' to a date range
+  startDate     DateTime
+  endDate       DateTime
+  type          HolidayType      @default(COMPANY)
+  teamId        String?
+  employeeId    String?
+  employee      EmployeeProfile? @relation(fields: [employeeId], references: [id])
+  createdBy     String
+  createdByUser User             @relation("CreatedByUser", fields: [createdBy], references: [id])
+  isLocked      Boolean          @default(false)
+  // When true (and type === EMPLOYEE), this holiday recurs every week on the same weekday as `startDate`
+  repeatWeekly  Boolean          @default(false)
+  createdAt     DateTime         @default(now())
+}
+
+// Model for defining weekly work/off days and hours
+model WorkSchedule {
+  id           String            @id @default(cuid())
+  name         String            @unique
+  isDefault    Boolean           @default(false)
+  startTime    DateTime
+  endTime      DateTime
+  isMonday     Boolean           @default(true)
+  isTuesday    Boolean           @default(true)
+  isWednesday  Boolean           @default(true)
+  isThursday   Boolean           @default(true)
+  isFriday     Boolean           @default(false)
+  isSaturday   Boolean           @default(true)
+  isSunday     Boolean           @default(true)
+  employees    EmployeeProfile[]
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+}
+
+
+// --- ENUMS (pre-defined choices) ---
+enum Role {
+  EMPLOYEE
+  ADMIN
+  SUPER_ADMIN
+}
+
+// UPDATED: Replaced CANCELLATION_REQUESTED with more specific statuses
+enum LeaveStatus {
+  PENDING_MANAGER
+  PENDING_ADMIN
+  APPROVED_BY_MANAGER
+  APPROVED_BY_ADMIN
+  DENIED
+  CANCELLED
+  CANCELLATION_PENDING_MANAGER
+  CANCELLATION_PENDING_ADMIN
+}
+
+enum LeaveUnit {
+  DAYS
+  HOURS
+}
+
+enum LeaveCadence {
+  ANNUAL
+  MONTHLY
+}
+
+enum HolidayType {
+  NATIONAL
+  COMPANY
+  TEAM
+  EMPLOYEE
+}
